@@ -48,7 +48,11 @@
   --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.45);
   color-scheme: dark;
 }
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; }
+body { margin: 0; }
+img { max-width: 100%; }
 body { background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 14px; overflow: hidden; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
@@ -87,7 +91,7 @@ svg.i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-widt
 .menu .mlabel { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 6px 10px 2px; }
 
 /* Main area */
-.main { position: relative; display: grid; grid-template-columns: 56px minmax(0, 1fr) 288px; min-height: 0; }
+.main { position: relative; overflow: hidden; display: grid; grid-template-columns: 56px minmax(0, 1fr) 288px; min-height: 0; }
 .tools { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 10px 0; overflow-y: auto; z-index: 10; }
 .tools .grp { display: flex; flex-direction: column; gap: 2px; }
 .tools hr { width: 26px; border: 0; border-top: 1px solid var(--line); margin: 6px 0; }
@@ -95,9 +99,9 @@ svg.i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-widt
 .tool:hover { background: var(--panel-2); color: var(--fg); }
 .tool[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
 .tool svg.i { width: 20px; height: 20px; }
-.tool .tip { position: absolute; left: calc(100% + 8px); top: 50%; transform: translateY(-50%); background: var(--fg); color: var(--bg); font-size: 12px; padding: 4px 8px; border-radius: 6px; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .12s; z-index: 30; }
+.tool .tip { position: fixed; left: 0; top: 0; background: var(--fg); color: var(--bg); font-size: 12px; padding: 4px 8px; border-radius: 6px; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .12s; z-index: 30; }
 .tool .tip kbd { opacity: .65; margin-left: 6px; font-family: inherit; }
-.tool:hover .tip { opacity: 1; }
+.tool:hover .tip, .tool:focus-visible .tip { opacity: 1; }
 
 .stage { position: relative; overflow: hidden; background-color: var(--canvas); touch-action: none; --gs: 24px; --gx: 0px; --gy: 0px; }
 .stage.grid-dots { background-image: radial-gradient(circle, var(--dot) 1.15px, transparent 1.45px); background-size: var(--gs) var(--gs); background-position: var(--gx) var(--gy); }
@@ -197,6 +201,9 @@ table.xl td.rn, table.xl th.rn { color: var(--muted); text-align: right; width: 
 #toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px); background: var(--fg); color: var(--bg); padding: 9px 14px; border-radius: 10px; font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 200; max-width: calc(100% - 32px); }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+@media (max-width: 1100px) { .seg .lbl { display: none; } }
+@media (max-width: 380px) { .brand { display: none; } }
+@media (max-width: 900px) { .brand-name { display: none; } }
 @media (max-width: 900px) {
   .main { grid-template-columns: 1fr; }
   .tools { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); flex-direction: row; max-width: calc(100% - 24px); overflow-x: auto; overflow-y: hidden; border: 1px solid var(--line); border-radius: 14px; padding: 4px 6px; box-shadow: var(--shadow); }
@@ -325,7 +332,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const uid = () => Math.random().toString(36).slice(2, 9);
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
-  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  set(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
 };
 
 /* ---------- Constants ---------- */
@@ -363,6 +370,40 @@ let undoStack = [], redoStack = [], lastKey = null, lastTime = 0;
 const stage = $('#stage'), svg = $('#svg'), world = $('#world');
 
 /* ---------- Helpers ---------- */
+const NODE_TYPES = ['rect', 'ellipse', 'triangle', 'polygon', 'sticky', 'text', 'icon', 'image'];
+const COLOR_RE = /^(auto|none|#[0-9a-f]{3,8})$/i;
+function cleanDoc(d) {
+  if (!d || !Array.isArray(d.nodes)) return null;
+  const str = (v, max = 5000) => (typeof v === 'string' ? v.slice(0, max) : '');
+  const num = (v, def, lo, hi) => { v = Number(v); return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def; };
+  const col = (v, def) => (typeof v === 'string' && COLOR_RE.test(v) ? v : def);
+  const nodes = [], ids = new Set();
+  for (const n of d.nodes.slice(0, 5000)) {
+    if (!n || !NODE_TYPES.includes(n.type) || !n.id || ids.has(String(n.id))) continue;
+    const m = makeNode(n.type, num(n.x, 0, -1e6, 1e6), num(n.y, 0, -1e6, 1e6));
+    Object.assign(m, {
+      id: String(n.id).slice(0, 40), w: num(n.w, m.w, 20, 5000), h: num(n.h, m.h, 16, 5000),
+      fill: col(n.fill, m.fill), stroke: col(n.stroke, m.stroke), color: col(n.color, m.color),
+      text: str(n.text), font: FONTS.includes(n.font) ? n.font : m.font, size: num(n.size, m.size, 6, 200),
+      bold: !!n.bold, italic: !!n.italic, underline: !!n.underline, strike: !!n.strike,
+      align: ['left', 'center', 'right'].includes(n.align) ? n.align : m.align, radius: num(n.radius, m.radius, 0, 999),
+      sides: Math.round(num(n.sides, m.sides, 3, 12)), link: str(n.link, 2000)
+    });
+    if (n.type === 'icon') m.icon = ICONSET[n.icon] ? n.icon : 'star';
+    if (n.type === 'image') { if (typeof n.src !== 'string' || !/^data:image\//i.test(n.src)) continue; m.src = n.src; }
+    ids.add(m.id); nodes.push(m);
+  }
+  const edges = (Array.isArray(d.edges) ? d.edges : []).filter(e => e && ids.has(String(e.from)) && ids.has(String(e.to))).slice(0, 10000).map(e => ({
+    id: String(e.id || uid()).slice(0, 40), from: String(e.from), to: String(e.to),
+    style: ['curve', 'elbow', 'lshape', 'straight'].includes(e.style) ? e.style : 'curve', arrow: !!e.arrow,
+    color: col(e.color, 'auto'), width: num(e.width, 2, 1, 12), label: str(e.label, 200)
+  }));
+  const comments = (Array.isArray(d.comments) ? d.comments : []).filter(c => c && Array.isArray(c.thread)).slice(0, 2000).map(c => ({
+    id: String(c.id || uid()).slice(0, 40), x: num(c.x, 0, -1e6, 1e6), y: num(c.y, 0, -1e6, 1e6),
+    thread: c.thread.slice(0, 200).map(m => ({ by: str(m && m.by, 80) || 'You', at: str(m && m.at, 40), text: str(m && m.text) }))
+  }));
+  return { name: str(d.name, 200), nodes, edges, comments };
+}
 function hexLum(hex) {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return null;
   const n = parseInt(m[1], 16), r = (n >> 16) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
@@ -504,7 +545,11 @@ function snapshot(key) {
   undoStack.push(JSON.stringify(doc)); if (undoStack.length > 120) undoStack.shift();
   redoStack = []; lastKey = key || null; lastTime = now;
 }
-function persist() { store.set('mm-doc-v2', JSON.stringify(doc)); }
+let warnedFull = false;
+function persist() {
+  if (store.set('mm-doc-v2', JSON.stringify(doc)) || warnedFull) return;
+  warnedFull = true; toast('This board is too large to autosave in the browser (large images?). Use File › Save to file to keep it.');
+}
 function changed(props = true) { render(); persist(); if (props) renderProps(); }
 function restore(json) {
   doc = JSON.parse(json); lastKey = null;
@@ -690,7 +735,7 @@ window.addEventListener('keydown', ev => {
   if (mod && ev.key.toLowerCase() === 'o') { ev.preventDefault(); cmd('open'); return; }
   if (typing) return;
   if (mod && ev.key.toLowerCase() === 'd') { ev.preventDefault(); duplicate(); return; }
-  if (ev.key === ' ') { spaceDown = true; ev.preventDefault(); return; }
+  if (ev.key === ' ') { if (document.activeElement && document.activeElement.tagName === 'BUTTON') return; spaceDown = true; ev.preventDefault(); return; }
   if (ev.key === 'Escape') { closePop(); closeMenus(); if (connectFrom) { connectFrom = null; render(); } else if (tool !== 'select') setTool('select'); else select(null); return; }
   if ((ev.key === 'Delete' || ev.key === 'Backspace') && sel) { ev.preventDefault(); removeSel(); return; }
   if (ev.key === 'Tab' && sel && sel.kind === 'node') { ev.preventDefault(); addRelative('child'); return; }
@@ -925,7 +970,7 @@ $('#file-image').addEventListener('change', ev => {
 $('#file-open').addEventListener('change', ev => {
   const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
   f.text().then(t => {
-    try { const d = JSON.parse(t); if (!Array.isArray(d.nodes)) throw 0; snapshot(); d.edges = d.edges || []; d.comments = d.comments || []; doc = d; sel = null; $('#docname').value = doc.name || ''; changed(); fit(); toast('Opened ' + f.name); }
+    try { const d = cleanDoc(JSON.parse(t)); if (!d) throw 0; snapshot(); doc = d; sel = null; $('#docname').value = doc.name || ''; changed(); fit(); toast('Opened ' + f.name); }
     catch (e) { toast('That file is not a Mindmuse board. Choose a .mindmap or .json file saved from this app.'); }
   });
 });
@@ -954,7 +999,11 @@ function setGrid(g) {
 }
 $$('[data-theme-btn]').forEach(b => b.addEventListener('click', () => setTheme(b.dataset.themeBtn)));
 $$('.topbar [data-grid]').forEach(b => b.addEventListener('click', () => setGrid(b.dataset.grid)));
-$$('.tool').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
+$$('.tool').forEach(b => {
+  b.addEventListener('click', () => setTool(b.dataset.tool));
+  const place = () => { const r = b.getBoundingClientRect(), t = b.querySelector('.tip'); t.style.left = (r.right + 8) + 'px'; t.style.top = (r.top + r.height / 2 - t.offsetHeight / 2) + 'px'; };
+  b.addEventListener('mouseenter', place); b.addEventListener('focus', place);
+});
 $('#btn-undo').addEventListener('click', undo);
 $('#btn-redo').addEventListener('click', redo);
 $('#z-in').addEventListener('click', () => { const r = stage.getBoundingClientRect(); zoomAt(1.2, r.width / 2, r.height / 2); });
@@ -1132,7 +1181,7 @@ setGrid(grid);
 setTool('select');
 let saved = store.get('mm-doc-v2');
 try { saved = saved && JSON.parse(saved); } catch (e) { saved = null; }
-doc = saved && Array.isArray(saved.nodes) ? saved : tplMindmap();
+doc = cleanDoc(saved) || tplMindmap();
 $('#docname').value = doc.name || '';
 renderProps();
 requestAnimationFrame(fit);
