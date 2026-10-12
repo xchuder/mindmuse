@@ -1,0 +1,1 @@
+Icons: Lucide v0.460.0, ISC License (https://lucide.dev/license).
